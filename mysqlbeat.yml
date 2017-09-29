@@ -4,61 +4,34 @@
 
 mysqlbeat:
   # Defines how often an event is sent to the output
-  #period: 10s
+  period: 1s
 
   # Defines the mysql hostname that the beat will connect to
-  #hostname: "127.0.0.1"
+  hostname: "127.0.0.1"
 
   # Defines the mysql port
-  #port: "3306"
+  port: "3306"
 
   # MAKE SURE THE USER ONLY HAS PERMISSIONS TO RUN THE QUERY DESIRED AND NOTHING ELSE.
   # Defines the mysql user to use
-  #username: "mysqlbeat_user"
+  username: "root"
 
   # Defines the mysql password to use - option #1 - plain text
-  #password: "mysqlbeat_pass"
+  password: "root"
 
   # Defines the mysql password to use - option #2 - AES encryption (see github.com/adibendahan/mysqlbeat-password-encrypter)
   #encryptedpassword: "2321f38819cf693951e88f00cd82"
 
   # Defines the queries that will run  - the query below is an example
   # LIMITATIONS: Query must start with SELECT/SHOW and cannot contain the character ; (for security reasons)
-  queries: [ "SELECT  CONCAT(VARIABLE_NAME, '__DELTA') AS VARIABLE_NAME, VARIABLE_VALUE 
-              FROM    information_schema.GLOBAL_STATUS 
-              WHERE   VARIABLE_NAME IN ('ABORTED_CONNECTS', 'CONNECTION_ERRORS_INTERNAL', 'CONNECTION_ERRORS_MAX_CONNECTIONS', 'CREATED_TMP_DISK_TABLES', 'CREATED_TMP_FILES', 
-                                         'CREATED_TMP_TABLES', 'HANDLER_COMMIT', 'HANDLER_ROLLBACK', 'HANDLER_SAVEPOINT', 'HANDLER_SAVEPOINT_ROLLBACK', 'INNODB_DATA_FSYNCS', 
-                                         'INNODB_DATA_READS', 'INNODB_DATA_WRITES', 'INNODB_LOG_WRITES', 'INNODB_OS_LOG_FSYNCS', 'INNODB_PAGES_CREATED', 'INNODB_PAGES_READ', 
-                                         'INNODB_PAGES_WRITTEN', 'INNODB_ROWS_DELETED', 'INNODB_ROWS_INSERTED', 'INNODB_ROWS_READ', 'INNODB_ROWS_UPDATED', 'INNODB_ROW_LOCK_TIME', 
-                                         'KEY_READS', 'KEY_READ_REQUESTS', 'KEY_WRITES', 'KEY_WRITE_REQUESTS', 'OPENED_TABLES', 'QCACHE_HITS', 'QCACHE_INSERTS', 'QCACHE_LOWMEM_PRUNES', 
-                                         'QCACHE_NOT_CACHED', 'SELECT_FULL_JOIN', 'SELECT_FULL_RANGE_JOIN', 'SELECT_RANGE', 'SELECT_RANGE_CHECK', 'SELECT_SCAN', 'SLOW_QUERIES', 
-                                         'SORT_MERGE_PASSES', 'SORT_RANGE', 'SORT_ROWS', 'SORT_SCAN', 'TABLE_LOCKS_IMMEDIATE', 'TABLE_LOCKS_WAITED', 'INNODB_ROW_LOCK_WAITS')
-              UNION
-              SELECT  VARIABLE_NAME, VARIABLE_VALUE 
-              FROM    information_schema.GLOBAL_VARIABLES 
-              WHERE   VARIABLE_NAME IN ('MAX_CONNECTIONS', 'TABLE_OPEN_CACHE')
-              UNION
-              SELECT  VARIABLE_NAME, VARIABLE_VALUE 
-              FROM    information_schema.GLOBAL_STATUS 
-              WHERE   VARIABLE_NAME IN ('INNODB_BUFFER_POOL_PAGES_DATA', 'INNODB_BUFFER_POOL_PAGES_FREE', 'INNODB_BUFFER_POOL_PAGES_TOTAL', 'OPEN_FILES', 'OPEN_TABLES', 
-                                        'QCACHE_QUERIES_IN_CACHE', 'THREADS_CONNECTED', 'THREADS_RUNNING', 'INNODB_PAGE_SIZE')
-              UNION
-              SELECT  'INNODB_BUFFER_POOL_HIT_RATIO' AS VARIABLE_NAME, 
-                      INNODB_BUFFER_POOL_READ_REQUESTS.VARIABLE_VALUE  / (INNODB_BUFFER_POOL_READ_REQUESTS.VARIABLE_VALUE  + INNODB_BUFFER_POOL_READS.VARIABLE_VALUE) * 100 AS VARIABLE_VALUE 
-              FROM    information_schema.GLOBAL_STATUS INNODB_BUFFER_POOL_READS, information_schema.GLOBAL_STATUS INNODB_BUFFER_POOL_READ_REQUESTS 
-              WHERE   INNODB_BUFFER_POOL_READS.variable_name ='INNODB_BUFFER_POOL_READS' AND 
-                      INNODB_BUFFER_POOL_READ_REQUESTS.variable_name ='INNODB_BUFFER_POOL_READ_REQUESTS'
-              UNION
-              SELECT  'CONST_100' AS VARIABLE_NAME, 100 AS VARIABLE_VALUE",
-             "SHOW SLAVE STATUS"]
+  queries: ["SELECT * FROM api.bill WHERE createdTime > {api_bill|0|createdTime} LIMIT 100", "SELECT * FROM api.coupon WHERE createdTime > {api_coupon|0|createdTime} LIMIT 100"]
 
   # Defines the queries result types
   # 'single-row' will be translated as columnname:value
   # 'two-columns' will be translated as value-column1:value-column2 for each row
   # 'multiple-rows' each row will be a document (with columnname:value)
   # 'show-slave-delay' will only send the `Seconds_Behind_Master` column from SHOW SLAVE STATUS
-  querytypes: ["two-columns",
-               "show-slave-delay"]
+  querytypes: ["resume-multiple-rows","resume-multiple-rows"]
 
   # Colums that end with the following wild card will report only delta in seconds ((neval - oldval)/timediff.Seconds())
   deltawildcard: "__DELTA"
@@ -83,7 +56,7 @@ output:
     # Scheme and port can be left out and will be set to the default (http and 9200)
     # In case you specify and additional path, the scheme is required: http://localhost:9200/path
     # IPv6 addresses should always be defined as: https://[2001:db8::1]:9200
-    #hosts: ["127.0.0.1:9200"]
+    hosts: ["127.0.0.1:9200"]
 
     # Optional protocol and basic auth credentials.
     #protocol: "https"
@@ -105,13 +78,13 @@ output:
     # A template is used to set the mapping in Elasticsearch
     # By default template loading is disabled and no template is loaded.
     # These settings can be adjusted to load your own template or overwrite existing ones
-    #template:
+    template:
 
       # Template name. By default the template name is mysqlbeat.
-      #name: "mysqlbeat"
+      name: "mysqlbeat"
 
       # Path to template file
-      #path: "mysqlbeat.template.json"
+      path: "mysqlbeat.template.json"
 
       # Overwrite existing template
       #overwrite: false
@@ -311,26 +284,26 @@ logging:
 
   # Send all logging output to syslog. On Windows default is false, otherwise
   # default is true.
-  #to_syslog: true
+#  to_syslog: true
 
   # Write all logging output to files. Beats automatically rotate files if rotateeverybytes
   # limit is reached.
-  #to_files: false
+  to_files: true
 
   # To enable logging to files, to_files option has to be set to true
-  #files:
+  files:
     # The directory where the log files will written to.
-    #path: /var/log/mysqlbeat
+    path: /var/log/mysqlbeat
 
     # The name of the files where the logs are written to.
-    #name: mysqlbeat
+    name: mysqlbeat
 
     # Configure log file size limit. If limit is reached, log file will be
     # automatically rotated
-    #rotateeverybytes: 10485760 # = 10MB
+    rotateeverybytes: 10485760 # = 10MB
 
     # Number of rotated log files to keep. Oldest files will be deleted first.
-    #keepfiles: 7
+    keepfiles: 7
 
   # Enable debug output for selected components. To enable all selectors use ["*"]
   # Other available selectors are beat, publish, service
@@ -339,6 +312,6 @@ logging:
 
   # Sets log level. The default log level is error.
   # Available log levels are: critical, error, warning, info, debug
-  #level: error
+  level: error
 
 

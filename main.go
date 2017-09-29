@@ -5,12 +5,14 @@ import (
 
 	"github.com/elastic/beats/libbeat/beat"
 
-	"github.com/adibendahan/mysqlbeat/beater"
+	"mysqlbeat/beater"
+	"fmt"
 )
 
 func main() {
 	err := beat.Run("mysqlbeat", "", beater.New())
 	if err != nil {
+		fmt.Println(err)
 		os.Exit(1)
 	}
 }

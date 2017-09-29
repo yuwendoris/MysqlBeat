@@ -1,6 +1,7 @@
-package: .
+package: mysqlbeat
 import:
 - package: github.com/elastic/beats
+  vcs: git
   version: d8ca37efa8888ce624e2cfaa90107e79fd41be1e
   subpackages:
   - libbeat/beat
@@ -8,4 +9,5 @@ import:
   - libbeat/common
   - libbeat/logp
 - package: github.com/go-sql-driver/mysql
+  vcs: git
   version: 1421caf44f6464fd2ee8de694c7508ee13f92964

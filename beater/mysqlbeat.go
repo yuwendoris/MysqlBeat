@@ -16,15 +16,22 @@ import (
 	"github.com/elastic/beats/libbeat/common"
 	"github.com/elastic/beats/libbeat/logp"
 
-	"github.com/adibendahan/mysqlbeat/config"
+	"mysqlbeat/config"
 
 	// mysql go driver
+	"bufio"
+	"encoding/json"
 	_ "github.com/go-sql-driver/mysql"
+	"os"
+	"regexp"
+	"sync"
 )
 
 // Mysqlbeat is a struct to hold the beat config & info
 type Mysqlbeat struct {
 	beatConfig       *config.Config
+	resumeFile       chan string
+	mu               sync.Mutex
 	done             chan struct{}
 	period           time.Duration
 	hostname         string
@@ -39,6 +46,11 @@ type Mysqlbeat struct {
 
 	oldValues    common.MapStr
 	oldValuesAge common.MapStr
+}
+
+type ResumeIndex struct {
+	Index string `json:"index"`
+	Value string `json:"value"`
 }
 
 var (
@@ -62,10 +74,13 @@ const (
 	defaultDeltaKeyWildcard = "__DELTAKEY"
 
 	// query types values
-	queryTypeSingleRow    = "single-row"
-	queryTypeMultipleRows = "multiple-rows"
-	queryTypeTwoColumns   = "two-columns"
-	queryTypeSlaveDelay   = "show-slave-delay"
+	queryTypeSingleRow          = "single-row"
+	queryTypeMultipleRows       = "multiple-rows"
+	queryTypeTwoColumns         = "two-columns"
+	queryTypeSlaveDelay         = "show-slave-delay"
+	queryTypeResumeMultipleRows = "resume-multiple-rows"
+
+	resumeMultipleRowsFile = "resume-multiple-rows.db"
 
 	// special column names values
 	columnNameSlaveDelay = "Seconds_Behind_Master"
@@ -79,8 +94,13 @@ const (
 // New Creates beater
 func New() *Mysqlbeat {
 	return &Mysqlbeat{
-		done: make(chan struct{}),
+		done:       make(chan struct{}),
+		resumeFile: make(chan string),
 	}
+}
+
+func (bt *Mysqlbeat) MockSetConfig(config *config.Config) {
+	bt.beatConfig = config
 }
 
 ///*** Beater interface methods ***///
@@ -187,7 +207,7 @@ func (bt *Mysqlbeat) Setup(b *beat.Beat) error {
 	safeQueries := true
 
 	logp.Info("Total # of queries to execute: %d", len(bt.queries))
-	for index, queryStr := range bt.queries {
+	for index, queryStr := range bt.beatConfig.Mysqlbeat.Queries {
 
 		strCleanQuery := strings.TrimSpace(strings.ToUpper(queryStr))
 
@@ -210,17 +230,25 @@ func (bt *Mysqlbeat) Setup(b *beat.Beat) error {
 func (bt *Mysqlbeat) Run(b *beat.Beat) error {
 	logp.Info("mysqlbeat is running! Hit CTRL-C to stop it.")
 
+	file, err := os.OpenFile(resumeMultipleRowsFile, os.O_CREATE, 0666)
+	if err != nil {
+		logp.Err("cannot open file %s", resumeMultipleRowsFile)
+	}
+	file.Close()
+
 	ticker := time.NewTicker(bt.period)
+
+	go bt.listenResumeFile()
+
 	for {
 		select {
 		case <-bt.done:
 			return nil
 		case <-ticker.C:
-		}
-
-		err := bt.beat(b)
-		if err != nil {
-			return err
+			err := bt.beat(b)
+			if err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -254,7 +282,12 @@ func (bt *Mysqlbeat) beat(b *beat.Beat) error {
 
 LoopQueries:
 	for index, queryStr := range bt.queries {
+		var lastResumeEvent common.MapStr
+		var uniKey string
+		var column string
+
 		// Log the query run time and run the query
+		queryStr, uniKey, column = bt.query(index, queryStr)
 		dtNow := time.Now()
 		rows, err := db.Query(queryStr)
 		if err != nil {
@@ -286,7 +319,7 @@ LoopQueries:
 				if err != nil {
 					logp.Err("Query #%v error generating event from rows: %v", index+1, err)
 				} else if event != nil {
-					b.Events.PublishEvent(event)
+					//b.Events.PublishEvent(event)
 					logp.Info("%v event sent", bt.queryTypes[index])
 				}
 				// breaking after the first row
@@ -300,9 +333,26 @@ LoopQueries:
 					logp.Err("Query #%v error generating event from rows: %v", index+1, err)
 					break LoopRows
 				} else if event != nil {
-					b.Events.PublishEvent(event)
+					//b.Events.PublishEvent(event)
 					logp.Info("%v event sent", bt.queryTypes[index])
 				}
+
+				// Move to the next row
+				continue LoopRows
+
+			case queryTypeResumeMultipleRows:
+				// Generate an event from the current row
+				event, err := bt.generateEventFromRow(rows, columns, bt.queryTypes[index], dtNow)
+
+				if err != nil {
+					logp.Err("Query #%v error generating event from rows: %v", index+1, err)
+					break LoopRows
+				} else if event != nil {
+					//b.Events.PublishEvent(event)
+					logp.Info("%v event sent", bt.queryTypes[index])
+				}
+
+				lastResumeEvent = event
 
 				// Move to the next row
 				continue LoopRows
@@ -321,9 +371,14 @@ LoopQueries:
 			}
 		}
 
+		if lastResumeEvent != nil && uniKey != "" && column != "" {
+			resumeValue := fmt.Sprintf("%s|%s", uniKey, fmt.Sprintf("%v", lastResumeEvent[column]))
+			bt.resumeFile <- resumeValue
+		}
+
 		// If the two-columns event has data, publish it
 		if bt.queryTypes[index] == queryTypeTwoColumns && len(twoColumnEvent) > 2 {
-			b.Events.PublishEvent(twoColumnEvent)
+			//b.Events.PublishEvent(twoColumnEvent)
 			logp.Info("%v event sent", queryTypeTwoColumns)
 			twoColumnEvent = nil
 		}
@@ -443,7 +498,8 @@ func (bt *Mysqlbeat) appendRowToEvent(event common.MapStr, row *sql.Rows, column
 				}
 			}
 		}
-	} else { // Not a delta column, add the value to the event as is
+	} else {
+		// Not a delta column, add the value to the event as is
 		if strColType == columnTypeString {
 			event[strEventColName] = strColValue
 		} else if strColType == columnTypeInt {
@@ -455,6 +511,120 @@ func (bt *Mysqlbeat) appendRowToEvent(event common.MapStr, row *sql.Rows, column
 
 	// Great success!
 	return nil
+}
+
+func (bt *Mysqlbeat) readResumeIndex(index string, reCh chan string) {
+	file, err := os.OpenFile(resumeMultipleRowsFile, os.O_RDONLY, 0)
+	if err != nil {
+		reCh <- ""
+		return
+	}
+	reader := bufio.NewReader(file)
+	for {
+		inputString, readerError := reader.ReadString('\n')
+		if readerError != nil {
+			reCh <- ""
+			return
+		}
+		var m ResumeIndex
+		err := json.Unmarshal([]byte(inputString), &m)
+		if err != nil {
+			reCh <- ""
+			return
+		}
+		if m.Index == index {
+			reCh <- m.Value
+			return
+		}
+	}
+}
+
+func (bt *Mysqlbeat) query(index int, queryStr string) (string, string, string) {
+	if bt.queryTypes[index] != queryTypeResumeMultipleRows {
+		return queryStr, "", ""
+	}
+	reCh := make(chan string)
+
+	re := regexp.MustCompile(`\{\w*\|\w*\|\w*\}`)
+	target := re.FindString(queryStr)
+	reOne := regexp.MustCompile(`\w*\|\w*\|\w*`)
+	oneString := reOne.FindString(target)
+	values := strings.Split(oneString, "|")
+
+	go bt.readResumeIndex(values[0], reCh)
+	replace := <-reCh
+
+	if replace == "" {
+		return re.ReplaceAllString(queryStr, values[1]), values[0], values[2]
+	} else {
+		return re.ReplaceAllString(queryStr, replace), values[0], values[2]
+	}
+
+}
+
+func (bt *Mysqlbeat) listenResumeFile() {
+	for {
+		resumeValue := <-bt.resumeFile
+		values := strings.Split(resumeValue, "|")
+		resumeIndex := &ResumeIndex{Index: values[0], Value: values[1]}
+		go bt.writeToResumeFile(resumeIndex)
+	}
+}
+
+func (bt *Mysqlbeat) writeToResumeFile(resumeIndex *ResumeIndex) {
+	bt.mu.Lock()
+	contents := []string{}
+	file, err := os.OpenFile(resumeMultipleRowsFile, os.O_CREATE|os.O_RDONLY, 0)
+	if err != nil {
+		logp.Err("while write to resumeFile open file err", err)
+
+	}
+	reader := bufio.NewReader(file)
+	for {
+		line, readErr := reader.ReadString('\n')
+		if line != "" {
+			contents = append(contents, line)
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	file.Close()
+
+	file, err = os.OpenFile(resumeMultipleRowsFile, os.O_WRONLY|os.O_TRUNC|os.O_SYNC, 0666)
+	defer file.Close()
+	if err != nil {
+		logp.Err("while write to resumeFile open file err", err)
+		bt.mu.Unlock()
+	}
+	writer := bufio.NewWriter(file)
+
+	find := false
+	for i := 0; i < len(contents); i++ {
+		var m ResumeIndex
+		jsErr := json.Unmarshal([]byte(contents[i]), &m)
+		if jsErr != nil {
+			continue
+		}
+		if m.Index == resumeIndex.Index {
+			find = true
+			m.Value = resumeIndex.Value
+		}
+		jsContent, jsMErr := json.Marshal(m)
+		if jsMErr != nil {
+			continue
+		}
+		contents[i] = string(jsContent)
+	}
+	if !find {
+		findContent, _ := json.Marshal(resumeIndex)
+		contents = append(contents, string(findContent))
+	}
+	for content := range contents {
+		writer.WriteString(fmt.Sprintf("%s\n", contents[content]))
+	}
+	writer.Flush()
+	bt.mu.Unlock()
 }
 
 // generateEventFromRow creates a new event from the row data and returns it
@@ -600,7 +770,8 @@ func (bt *Mysqlbeat) generateEventFromRow(row *sql.Rows, columns []string, query
 					}
 				}
 			}
-		} else { // Not a delta column, add the value to the event as is
+		} else {
+			// Not a delta column, add the value to the event as is
 			if strColType == columnTypeString {
 				event[strEventColName] = strColValue
 			} else if strColType == columnTypeInt {
