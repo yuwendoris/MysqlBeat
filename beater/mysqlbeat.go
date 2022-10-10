@@ -319,7 +319,7 @@ LoopQueries:
 				if err != nil {
 					logp.Err("Query #%v error generating event from rows: %v", index+1, err)
 				} else if event != nil {
-					//b.Events.PublishEvent(event)
+					b.Events.PublishEvent(event)
 					logp.Info("%v event sent", bt.queryTypes[index])
 				}
 				// breaking after the first row
@@ -333,7 +333,7 @@ LoopQueries:
 					logp.Err("Query #%v error generating event from rows: %v", index+1, err)
 					break LoopRows
 				} else if event != nil {
-					//b.Events.PublishEvent(event)
+					b.Events.PublishEvent(event)
 					logp.Info("%v event sent", bt.queryTypes[index])
 				}
 
@@ -348,7 +348,7 @@ LoopQueries:
 					logp.Err("Query #%v error generating event from rows: %v", index+1, err)
 					break LoopRows
 				} else if event != nil {
-					//b.Events.PublishEvent(event)
+					b.Events.PublishEvent(event)
 					logp.Info("%v event sent", bt.queryTypes[index])
 				}
 
@@ -378,7 +378,7 @@ LoopQueries:
 
 		// If the two-columns event has data, publish it
 		if bt.queryTypes[index] == queryTypeTwoColumns && len(twoColumnEvent) > 2 {
-			//b.Events.PublishEvent(twoColumnEvent)
+			b.Events.PublishEvent(twoColumnEvent)
 			logp.Info("%v event sent", queryTypeTwoColumns)
 			twoColumnEvent = nil
 		}
@@ -559,7 +559,6 @@ func (bt *Mysqlbeat) query(index int, queryStr string) (string, string, string) 
 	} else {
 		return re.ReplaceAllString(queryStr, replace), values[0], values[2]
 	}
-
 }
 
 func (bt *Mysqlbeat) listenResumeFile() {
