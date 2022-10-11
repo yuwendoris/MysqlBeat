@@ -63,3 +63,9 @@ Run the default configuration provided to get the dashboard below (you should im
 
 ## License
 GNU General Public License v2
+
+## New function add
+To support business delta data collect:
+```
+select * from course where updatedTime > {course_updatedTime|0|updatedTime} order by updatedTime LIMIT 100
+```
